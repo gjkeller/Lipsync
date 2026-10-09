@@ -13,7 +13,7 @@ import LipsyncCore
     }
 
     /// Raise when the catalog search improves, so the songs it missed are looked up again.
-    private static let searchVersion = 2
+    private static let searchVersion = 3
 
     private var entries: [String: Entry] = [:]
     private var uriForSong: [String: String] = [:]

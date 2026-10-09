@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 /// A small floating pill at the bottom of the screen, in the spirit of Wispr Flow: it appears
-/// over everything, never takes focus, and fades away on its own.
+/// over everything, never takes focus, and fades away on its own unless the pointer is on it.
 struct Toast {
     enum Style { case info, warning, error }
 
@@ -29,7 +29,13 @@ struct ToastAction {
     private var hideTask: Task<Void, Never>?
     private var lastShown: [String: Date] = [:]
     private var current: Toast?
-    private var isHovering = false
+    /// When the notice goes, unless the pointer is on it.
+    private var hideAt = Date.distantFuture
+
+    /// The shortest time any notice stays up, so there's time to read it.
+    private static let minimumDuration: TimeInterval = 6
+    /// How long a notice stays after the pointer leaves it.
+    private static let linger: TimeInterval = 2.5
 
     func show(_ toast: Toast) {
         let now = Date()
@@ -45,11 +51,7 @@ struct ToastAction {
 
         let panel = self.panel ?? makePanel()
         self.panel = panel
-        let host = NSHostingView(rootView: ToastView(
-            toast: toast,
-            onHover: { [weak self] hovering in self?.hoverChanged(hovering) },
-            onDismiss: { [weak self] in self?.dismiss() }
-        ))
+        let host = NSHostingView(rootView: ToastView(toast: toast, onDismiss: { [weak self] in self?.dismiss() }))
         let size = host.fittingSize
         host.frame = NSRect(origin: .zero, size: size)
         panel.contentView = host
@@ -73,6 +75,7 @@ struct ToastAction {
 
     func dismiss() {
         hideTask?.cancel()
+        hideTask = nil
         guard let panel, panel.isVisible else { return }
         current = nil
         NSAnimationContext.runAnimationGroup({ context in
@@ -85,21 +88,29 @@ struct ToastAction {
         })
     }
 
+    /// Hides the notice after `seconds`, but never while the pointer is on it: it stays as long
+    /// as you hover and goes a little after you move away. The pointer is watched directly,
+    /// because a panel in a background app gets no hover events.
     private func scheduleHide(after seconds: TimeInterval) {
-        hideTask?.cancel()
+        hideAt = Date().addingTimeInterval(max(seconds, Self.minimumDuration))
+        guard hideTask == nil else { return }
         hideTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-            guard let self, !Task.isCancelled else { return }
-            if self.isHovering {
-                self.scheduleHide(after: 1.5)
-            } else {
-                self.dismiss()
+            while !Task.isCancelled {
+                guard let self else { return }
+                if self.pointerIsOnPanel {
+                    self.hideAt = max(self.hideAt, Date().addingTimeInterval(Self.linger))
+                } else if Date() >= self.hideAt {
+                    self.dismiss()
+                    return
+                }
+                try? await Task.sleep(nanoseconds: 200_000_000)
             }
         }
     }
 
-    private func hoverChanged(_ hovering: Bool) {
-        isHovering = hovering
+    private var pointerIsOnPanel: Bool {
+        guard let panel, panel.isVisible else { return false }
+        return NSMouseInRect(NSEvent.mouseLocation, panel.frame, false)
     }
 
     private func makePanel() -> NSPanel {
@@ -119,7 +130,6 @@ struct ToastAction {
 
 private struct ToastView: View {
     let toast: Toast
-    let onHover: (Bool) -> Void
     let onDismiss: () -> Void
 
     private var accent: Color {
@@ -167,7 +177,6 @@ private struct ToastView: View {
         .padding(.bottom, 26)
         .fixedSize()
         .contentShape(Rectangle())
-        .onHover(perform: onHover)
         .onTapGesture(perform: onDismiss)
     }
 }

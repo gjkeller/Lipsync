@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/icon.png" width="128" height="128" alt="Lipsync icon"></p>
+
 # Lipsync
 
 Use Spotify the way you always do: search, playlists, radio, DJ, recommendations. Every song

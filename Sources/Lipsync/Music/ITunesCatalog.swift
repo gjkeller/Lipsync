@@ -39,10 +39,11 @@ import LipsyncCore
     private var worker: Task<Void, Never>?
     /// Lookups that failed for a transient reason, kept out of retries for a little while.
     private var recentFailures: [String: Date] = [:]
-    /// Each artist's Apple Music songs, fetched once a session for the catalog fallback.
-    private var artistCatalogs: [String: [AppleTrack]] = [:]
+    /// The catalog fallback's answers (artists, their albums, track lists), which many songs
+    /// share, kept for the session.
+    private var sessionCache: [String: Any] = [:]
 
-    private enum Lookup {
+    enum Lookup {
         case found(AppleTrack)
         case notFound
         case failed
@@ -161,47 +162,68 @@ import LipsyncCore
             }
             if failed { break }
         }
-        // Apple's search index misses some songs outright: 100 gecs' "Dumbest Girl Alive" never
-        // comes back, by any term, yet it is in the artist's catalog.
-        if !failed, !track.primaryArtist.isEmpty {
-            if let songs = await catalog(ofArtist: track.primaryArtist, priority: priority) {
-                if let match = Matcher.best(for: track, among: songs, sameISRC: false) {
-                    record(track, .found(match))
-                    return
-                }
-            } else {
+        // Apple's search index misses some songs outright, new releases especially: 100 gecs'
+        // "Dumbest Girl Alive" never comes back, by any term. The catalog still has them.
+        if !failed {
+            switch await catalogMatch(for: track, priority: priority) {
+            case .found(let match):
+                record(track, .found(match))
+                return
+            case .notFound:
+                break
+            case .failed:
                 failed = true
             }
         }
         record(track, failed ? .failed : .notFound)
     }
 
-    /// The artist's songs, or nil if the lookup failed and should be retried later.
-    private func catalog(ofArtist name: String, priority: RateLimiter.Priority) async -> [AppleTrack]? {
-        let key = Matcher.normalizeArtist(name)
-        if let cached = artistCatalogs[key] { return cached }
+    /// Looks for the song on its album, then among the artist's songs. The album goes first
+    /// because Apple lists at most 200 of an artist's songs, while an album has every track.
+    func catalogMatch(for track: SpotifyTrack, priority: RateLimiter.Priority) async -> Lookup {
+        guard !track.primaryArtist.isEmpty else { return .notFound }
+        let artistKey = "artist:" + Matcher.normalizeArtist(track.primaryArtist)
+        guard let artist = await remembered(artistKey, priority, {
+            await Self.artistID(named: track.primaryArtist, storefront: self.storefront, session: self.session)
+        }) else { return .failed }
+        guard let artistID = artist else { return .notFound }
+
+        if !track.album.isEmpty {
+            guard let albums = await remembered("albums:\(artistID)", priority, {
+                await Self.albums(ofArtist: artistID, storefront: self.storefront, session: self.session)
+            }) else { return .failed }
+            let wanted = Matcher.normalizeTitle(track.album)
+            if let album = albums.first(where: { Matcher.normalizeTitle($0.name) == wanted }) {
+                guard let songs = await remembered("songs:\(album.id)", priority, {
+                    await Self.songs(of: album.id, storefront: self.storefront, session: self.session)
+                }) else { return .failed }
+                if let match = Matcher.best(for: track, among: songs, sameISRC: false) { return .found(match) }
+            }
+        }
+
+        guard let songs = await remembered("songs:\(artistID)", priority, {
+            await Self.songs(of: artistID, storefront: self.storefront, session: self.session)
+        }) else { return .failed }
+        return Matcher.best(for: track, among: songs, sameISRC: false).map(Lookup.found) ?? .notFound
+    }
+
+    /// One rationed request whose answer is kept for the session. nil if it failed.
+    private func remembered<Value>(_ key: String, _ priority: RateLimiter.Priority,
+                                   _ fetch: () async -> Result<Value, Error>) async -> Value? {
+        if let hit = sessionCache[key] as? Remembered<Value> { return hit.value }
         guard await limiter.acquire(priority) else { return nil }
-        let artistID: Int?
-        switch await Self.artistID(named: name, storefront: storefront, session: session) {
-        case .success(let id):
-            artistID = id
+        switch await fetch() {
+        case .success(let value):
+            sessionCache[key] = Remembered(value: value)
+            return value
         case .failure(let error):
             reportFailure(error)
             return nil
         }
-        guard let artistID else {
-            artistCatalogs[key] = []
-            return []
-        }
-        guard await limiter.acquire(priority) else { return nil }
-        switch await Self.songs(ofArtist: artistID, storefront: storefront, session: session) {
-        case .success(let songs):
-            artistCatalogs[key] = songs
-            return songs
-        case .failure(let error):
-            reportFailure(error)
-            return nil
-        }
+    }
+
+    private struct Remembered<Value> {
+        let value: Value
     }
 
     private func reportFailure(_ error: Error) {
@@ -234,8 +256,27 @@ import LipsyncCore
         }
     }
 
-    /// Up to 200 of the artist's streamable songs.
-    nonisolated static func songs(ofArtist id: Int, storefront: String, session: URLSession = .shared) async -> Result<[AppleTrack], Error> {
+    struct Album: Sendable {
+        let id: Int
+        let name: String
+    }
+
+    /// The artist's albums and singles.
+    nonisolated static func albums(ofArtist id: Int, storefront: String, session: URLSession = .shared) async -> Result<[Album], Error> {
+        await request("lookup", [
+            URLQueryItem(name: "id", value: String(id)),
+            URLQueryItem(name: "entity", value: "album"),
+            URLQueryItem(name: "limit", value: "200"),
+        ], storefront: storefront, session: session).map { results in
+            results.compactMap { result in
+                guard result.wrapperType == "collection", let id = result.collectionId, let name = result.collectionName else { return nil }
+                return Album(id: id, name: name)
+            }
+        }
+    }
+
+    /// The streamable songs of an album, or up to 200 of an artist's.
+    nonisolated static func songs(of id: Int, storefront: String, session: URLSession = .shared) async -> Result<[AppleTrack], Error> {
         await request("lookup", [
             URLQueryItem(name: "id", value: String(id)),
             URLQueryItem(name: "entity", value: "song"),
@@ -329,8 +370,10 @@ import LipsyncCore
 
 private struct SearchJSON: Decodable {
     struct Result: Decodable {
+        let wrapperType: String?
         let kind: String?
         let artistId: Int?
+        let collectionId: Int?
         let trackId: Int?
         let trackName: String?
         let artistName: String?

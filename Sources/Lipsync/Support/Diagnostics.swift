@@ -79,10 +79,9 @@ enum Diagnostics {
             guard seconds != nil else { return }
             var best = Matcher.best(for: track, among: candidates, sameISRC: false)
             if best == nil {
-                print("Not in the search results; checking \(args[1])'s catalog")
-                if case .success(let id?) = await ITunesCatalog.artistID(named: args[1], storefront: storefront),
-                   case .success(let songs) = await ITunesCatalog.songs(ofArtist: id, storefront: storefront) {
-                    best = Matcher.best(for: track, among: songs, sameISRC: false)
+                print("Not in the search results; checking the album and \(args[1])'s catalog")
+                if case .found(let song) = await ITunesCatalog().catalogMatch(for: track, priority: .urgent) {
+                    best = song
                 }
             }
             print(best.map { "Match: \($0.id) \($0.title) — \($0.artist) [\($0.album ?? "")]" } ?? "No match: Lipsync would play this from Spotify")
