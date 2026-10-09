@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>Lipsync</string>
+	<key>CFBundleExecutable</key>
+	<string>Lipsync</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleIdentifier</key>
+	<string>__BUNDLE_ID__</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>Lipsync</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>__VERSION__</string>
+	<key>CFBundleVersion</key>
+	<string>__BUILD__</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.music</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.2</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSAppleMusicUsageDescription</key>
+	<string>Lipsync plays the songs you pick in Spotify from Apple Music.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Lipsync follows what Spotify plays and plays the same song in the Music app.</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Lipsync silences Spotify so you only hear Apple Music. Nothing is recorded or saved.</string>
+	<key>LipsyncSpotifyClientID</key>
+	<string>__SPOTIFY_CLIENT_ID__</string>
+	<key>LipsyncBackend</key>
+	<string>__BACKEND__</string>
+</dict>
+</plist>
